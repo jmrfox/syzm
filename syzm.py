@@ -1,6 +1,10 @@
 import pygame
 import sys
 import numpy as np
+import networkx as nx
+
+from names import generate_random_name
+import random
 
 WIDTH = 800
 HEIGHT = 600
@@ -18,147 +22,258 @@ CYAN = (0, 255, 255)
 MAGENTA = (255, 0, 255)
 COLORS = [WHITE, BLACK, BLUE, RED, GREEN, ORANGE, YELLOW, PURPLE, CYAN, MAGENTA]
 
+
 def opposite_color(rbg):
     return tuple(255 - x for x in rbg)
 
-BACKGROUND_COLOR = np.ones(3) * 30
 
-import random
-import string
+BACKGROUND_COLOR = np.ones(3) * 60
+FRAMERATE_DEFAULT = 60
 
-def generate_random_name(sylb=2):
-    """Generate a random name following common English name tendencies."""
-    vowels = "aeiou"
-    consonants = "bcdfghjklmnpqrstvwxyz"
-    syllables = ["ba", "be", "bi", "bo", "bu", "da", "de", "di", "do", "du", "fa", "fe", "fi", "fo", "fu", "ga", "ge", "gi", "go", "gu", "ha", "he", "hi", "ho", "hu", "ja", "je", "ji", "jo", "ju", "ka", "ke", "ki", "ko", "ku", "la", "le", "li", "lo", "lu", "ma", "me", "mi", "mo", "mu", "na", "ne", "ni", "no", "nu", "pa", "pe", "pi", "po", "pu", "ra", "re", "ri", "ro", "ru", "sa", "se", "si", "so", "su", "ta", "te", "ti", "to", "tu", "va", "ve", "vi", "vo", "vu", "wa", "we", "wi", "wo", "wu", "ya", "ye", "yi", "yo", "yu", "za", "ze", "zi", "zo", "zu"]
-    name = ""
+STEPRATE_DEFAULT = 0.2
+STEPSIZE_DEFAULT = 8
+TURN_VARIANCE_DEFAULT = 0.2
+TRADE_DISTANCE_DEFAULT = 50
 
-    for i in range(sylb):
-        name = name + random.choice(syllables)
-        if random.random() < 0.1:
-            name = name + random.choice(vowels)
-        if random.random() < 0.1:
-            name = name + random.choice(consonants)
-                
 
-    return ''.join(name).capitalize()
-
-def name(sylb=3):
+def make_name(sylb=3):
     return generate_random_name(sylb)
- 
+
+
+# RGB
+# sap, bast, dew
+
+
 class Resources(dict):
     def __init__(self):
         super().__init__()
         self["dew"] = 0
         self["bast"] = 0
         self["sap"] = 0
-        
+
     def __str__(self):
         return ", ".join([str(v) + " " + k for k, v in self.items()])
-    
+
     def __repr__(self):
         return self.__str__()
-    
+
     def __add__(self, other):
         result = Resources()
         for k in self.keys():
             result[k] = self[k] + other[k]
         return result
-    
+
     def __sub__(self, other):
         result = Resources()
         for k in self.keys():
             result[k] = self[k] - other[k]
         return result
-    
-        
+
+    def randomize(self):
+        for k in self.keys():
+            self[k] = np.random.randint(0, 10)
+
+    def get_tuple(self):
+        return (self["dew"], self["bast"], self["sap"])
+
+
 class Agent:
-    def __init__(self, name, loc=np.array([0, 0]), color=None):
+    def __init__(self, name, loc=np.array([0, 0]), bearing=0.0, color=None):
         self.name = name
         self.loc = loc
+        self.bearing = bearing
         if color is None:
             self.color = random.choice(COLORS)
         else:
             self.color = color
+
         self.resources = Resources()
-        self.trading = False
+        self.resources.randomize()
         self.trading_with = None
-        
-    def proximity(self, other: "Agent"):
-        return np.linalg.norm(self.loc - other.loc)
-    
+        self.want = random.choice(["dew", "bast", "sap"])
+
+        self.steprate = STEPRATE_DEFAULT  # ratio
+        self.stepsize = STEPSIZE_DEFAULT  # int
+        self.turn_variance = TURN_VARIANCE_DEFAULT
+
     def step(self, step=np.array([0, 0])):
         if TORUS:
             self.loc = np.mod(self.loc + step, np.array([WIDTH, HEIGHT]))
         else:
-            self.loc = np.clip(self.loc + step, np.array([0, 0]), np.array([WIDTH, HEIGHT]))
-        
+            self.loc = np.clip(
+                self.loc + step, np.array([0, 0]), np.array([WIDTH, HEIGHT])
+            )
+
     def __str__(self):
-        return self.name + " is at " + str(self.loc)
-    
+        """print all properties"""
+        out = []
+        out.append(f"name\t{self.name}")
+        out.append(f"loc\t{self.loc}")
+        out.append(f"color\t{self.color}")
+        out.append(f"resources\t{self.resources}")
+        out.append(f"trading_with\t{self.trading_with}")
+        out.append(f"want\t{self.want}")
+        return "\n".join(out)
+
+    def __repr__(self):
+        return self.__str__()
+
+
+class AgentGraph(nx.Graph):
+    def __init__(self, agents=None):
+        super().__init__()
+        if agents is not None:
+            for agent in agents:
+                self.add_agent(agent)
+        self.trade_distance = TRADE_DISTANCE_DEFAULT
+
+    def add_agent(self, agent):
+        self.add_node(agent)
+        others = [node for node in self.nodes if node != agent]
+        for other in others:
+            self.add_edge(agent, other)
+
+    def __str__(self):
+        out = "Agents:\n"
+        if len(self.nodes) == 0:
+            out += "None"
+        else:
+            out += "\n".join([str(agent) for agent in self.nodes])
+        return out
+
+    def __repr__(self):
+        return self.__str__()
+
+    def distance(self, agent1, agent2):
+        return np.linalg.norm(agent1.loc - agent2.loc)
+
+    def do_steps(self):
+        for agent in self.nodes:
+            if np.random.rand() < agent.steprate:
+                agent.bearing += np.random.randn() * agent.turn_variance
+                step = (
+                    np.array([np.cos(agent.bearing), np.sin(agent.bearing)])
+                    * agent.stepsize
+                )
+                agent.step(step)
+
+    def get_distances(self, agent):
+        distances = {}
+        others = [node for node in self.nodes if node != agent]
+        for other in others:
+            distances[other] = self.distance(agent, other)
+        return distances
+
+    def trade(self, agent1, agent2):
+        # trade resources, accounting for what each agent wants
+        agent1.resources[agent1.want] += 1
+        agent2.resources[agent1.want] -= 1
+        agent1.resources[agent2.want] -= 1
+        agent2.resources[agent2.want] += 1
+        print(
+            agent1.name
+            + " : "
+            + str(agent1.resources.get_tuple())
+            + " <-> "
+            + agent2.name
+            + " : "
+            + str(agent2.resources.get_tuple())
+        )
+
+    def do_trades(self):
+        for edge in self.edges:
+            agent1, agent2 = edge
+            if self.distance(agent1, agent2) < self.trade_distance:
+                if (
+                    min(agent1.resources.get_tuple()) <= 0
+                    or min(agent2.resources.get_tuple()) <= 0
+                ):
+                    continue
+                elif agent1.want == agent2.want:
+                    continue
+                else:
+                    self.trade(agent1, agent2)
+                    agent1.step((agent2.loc - agent1.loc) / 2)
+                    agent2.step((agent1.loc - agent2.loc) / 2)
+
+    def count_all_resources(self):
+        resources = Resources()
+        for agent in self.nodes:
+            resources += agent.resources
+        return resources
+
+    def update(self):
+        self.do_steps()
+        self.do_trades()
+
+    def check_for_winner(self):
+        win_amount = 30
+        for agent in self.nodes:
+            if max(agent.resources.get_tuple()) >= win_amount:
+                return agent
+        return None
+
 
 class App:
     def __init__(self, width=WIDTH, height=HEIGHT):
         pygame.init()
         self.screen = pygame.display.set_mode((width, height))
         pygame.display.set_caption("syzm")
-        pygame_icon = pygame.image.load('icon.png')
+        pygame_icon = pygame.image.load("icon.png")
         pygame.display.set_icon(pygame_icon)
         self.clock = pygame.time.Clock()
         self.agents = []
-        self.font = pygame.font.SysFont(pygame.font.get_fonts()[0], 20, bold=True)
-        
-        
-    def add_agent(self, agent):
-        self.agents.append(agent)
-        self.draw_agent(agent)
-    
-    def draw_agent(self, agent):
-        pygame.draw.circle(self.screen, agent.color, agent.loc, 20)
-        text = self.font.render(agent.name, True, opposite_color(agent.color))
-        text_rect = text.get_rect(center=agent.loc)
-        self.screen.blit(text, text_rect)
-    
-    def update_agents(self):
+        self.font = pygame.font.SysFont(pygame.font.get_fonts()[0], 16, bold=True)
+
+    def draw_graph(self, graph: "AgentGraph"):
+        line_height = self.font.get_linesize()
+        for agent in graph.nodes:
+            pygame.draw.circle(self.screen, agent.color, agent.loc, 10)
+
+            text = self.font.render(
+                agent.name + " " + str(agent.resources.get_tuple()),
+                True,
+                opposite_color(agent.color),
+            )
+            text_rect = text.get_rect(center=(agent.loc[0], agent.loc[1]))
+            self.screen.blit(text, text_rect)
+
+            if agent.trading_with is not None:
+                pygame.draw.line(self.screen, RED, agent.loc, agent.trading_with.loc, 5)
+            text_rect = text.get_rect(center=agent.loc)
+            self.screen.blit(text, text_rect)
+
+    def update(self, graph: "AgentGraph"):
         self.screen.fill(BACKGROUND_COLOR)
-        for agent in self.agents:
-            if np.random.rand() < 0.1:
-                step = np.random.randint(-20, 20, 2)
-                agent.step(step)
-            distances = {}
-            for other in self.agents:
-                if other != agent:
-                    distances[other] = agent.proximity(other)
-            closest = min(distances, key=distances.get)
-            if agent.proximity(closest) < 20:
-                agent.trading = True
-                agent.trading_with = closest
-            else:
-                agent.trading = False
-                agent.trading_with = None
-            self.draw_agent(agent)
-            if agent.trading:
-                print(agent.name + " is trading with " + agent.trading_with.name)
+        graph.update()
+        self.draw_graph(graph)
         pygame.display.flip()
-    
-    def run(self):
+        winner = graph.check_for_winner()
+        if winner is not None:
+            print(winner.name + " wins!")
+            pygame.quit()
+            sys.exit()
+
+    def run(self, graph: "AgentGraph"):
         running = True
         while running:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     running = False
-            self.update_agents()
-            self.clock.tick(60)
+            self.update(graph)
+            self.clock.tick(FRAMERATE_DEFAULT)
         pygame.quit()
         sys.exit()
 
-if __name__ == "__main__":
-    app = App()
 
-    n_agents = 10
-    
+if __name__ == "__main__":
+    n_agents = 20
+    graph = AgentGraph()
     for i in range(n_agents):
-        agent = Agent(name(random.choice([1,2,3])), np.random.randint(0, min(WIDTH, HEIGHT), 2))
-        app.add_agent(agent)
-        
-    app.run()
+        name = make_name(random.choice([1, 2, 3]))
+        loc = np.random.randint(0, min(WIDTH, HEIGHT), 2)
+        bearing = np.random.rand() * 2 * np.pi
+        agent = Agent(name, loc=loc, bearing=bearing, color=random.choice(COLORS))
+        graph.add_agent(agent)
+    app = App()
+    app.run(graph)
