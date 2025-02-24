@@ -6,9 +6,6 @@ import networkx as nx
 from names import generate_random_name
 import random
 
-WIDTH = 800
-HEIGHT = 600
-TORUS = True
 
 WHITE = (255, 255, 255)
 BLACK = (0, 0, 0)
@@ -29,27 +26,33 @@ def opposite_color(rbg):
 
 BACKGROUND_COLOR = np.ones(3) * 60
 FRAMERATE_DEFAULT = 60
+WIDTH = 800
+HEIGHT = 600
+TORUS = False
+
+RESOURCE_LIST = ["dew", "bast", "sap"]
+
+N_AGENTS = 20
 
 STEPRATE_DEFAULT = 0.2
-STEPSIZE_DEFAULT = 8
-TURN_VARIANCE_DEFAULT = 0.2
-TRADE_DISTANCE_DEFAULT = 50
+STEPSIZE_DEFAULT = 5
+TURN_VARIANCE_DEFAULT = 0.4
+TRADE_DISTANCE_DEFAULT = 100
 
 
 def make_name(sylb=3):
     return generate_random_name(sylb)
 
 
-# RGB
-# sap, bast, dew
+def choose_random_other(lst, item):
+    return random.choice([x for x in lst if x != item])
 
 
 class Resources(dict):
     def __init__(self):
         super().__init__()
-        self["dew"] = 0
-        self["bast"] = 0
-        self["sap"] = 0
+        for resource in RESOURCE_LIST:
+            self[resource] = 0
 
     def __str__(self):
         return ", ".join([str(v) + " " + k for k, v in self.items()])
@@ -90,7 +93,7 @@ class Agent:
         self.resources = Resources()
         self.resources.randomize()
         self.trading_with = None
-        self.want = random.choice(["dew", "bast", "sap"])
+        self.want = random.choice(RESOURCE_LIST)
 
         self.steprate = STEPRATE_DEFAULT  # ratio
         self.stepsize = STEPSIZE_DEFAULT  # int
@@ -165,36 +168,47 @@ class AgentGraph(nx.Graph):
         return distances
 
     def trade(self, agent1, agent2):
-        # trade resources, accounting for what each agent wants
-        agent1.resources[agent1.want] += 1
-        agent2.resources[agent1.want] -= 1
-        agent1.resources[agent2.want] -= 1
-        agent2.resources[agent2.want] += 1
-        print(
-            agent1.name
-            + " : "
-            + str(agent1.resources.get_tuple())
-            + " <-> "
-            + agent2.name
-            + " : "
-            + str(agent2.resources.get_tuple())
-        )
+        success = False
+        for r1 in RESOURCE_LIST:
+            for r2 in RESOURCE_LIST:
+                if r1 == r2:
+                    continue
+                if r1 == agent1.want and agent2.resources[r1] > 0:
+                    agent2.resources[r1] -= 1
+                    agent1.resources[r1] += 1
+                    success = True
+                if r1 == agent2.want and agent1.resources[r1] > 0:
+                    agent1.resources[r1] -= 1
+                    agent2.resources[r1] += 1
+                    success = True
+        return success
 
     def do_trades(self):
-        for edge in self.edges:
-            agent1, agent2 = edge
+        for pair in self.edges:
+            agent1, agent2 = pair
             if self.distance(agent1, agent2) < self.trade_distance:
-                if (
-                    min(agent1.resources.get_tuple()) <= 0
-                    or min(agent2.resources.get_tuple()) <= 0
-                ):
-                    continue
-                elif agent1.want == agent2.want:
-                    continue
+                if agent1.want != agent2.want:
+                    success = self.trade(agent1, agent2)
+                    if success:
+                        agent1.trading_with = agent2
+                        agent2.trading_with = agent1
+                        agent1.step((agent2.loc - agent1.loc) / 2)
+                        agent2.step((agent1.loc - agent2.loc) / 2)
+                        print(
+                            agent1.name
+                            + " : "
+                            + str(agent1.resources.get_tuple())
+                            + " <-> "
+                            + agent2.name
+                            + " : "
+                            + str(agent2.resources.get_tuple())
+                        )
                 else:
-                    self.trade(agent1, agent2)
-                    agent1.step((agent2.loc - agent1.loc) / 2)
-                    agent2.step((agent1.loc - agent2.loc) / 2)
+                    agent1.trading_with = None
+                    agent2.trading_with = None
+            else:
+                agent1.trading_with = None
+                agent2.trading_with = None
 
     def count_all_resources(self):
         resources = Resources()
@@ -207,7 +221,7 @@ class AgentGraph(nx.Graph):
         self.do_trades()
 
     def check_for_winner(self):
-        win_amount = 30
+        win_amount = 50
         for agent in self.nodes:
             if max(agent.resources.get_tuple()) >= win_amount:
                 return agent
@@ -267,7 +281,7 @@ class App:
 
 
 if __name__ == "__main__":
-    n_agents = 20
+    n_agents = N_AGENTS
     graph = AgentGraph()
     for i in range(n_agents):
         name = make_name(random.choice([1, 2, 3]))
